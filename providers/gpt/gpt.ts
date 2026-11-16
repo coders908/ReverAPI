@@ -11,7 +11,6 @@ import type {
 } from "../types.js";
 
 const BASE = "https://chatgpt.com";
-const CONFIG_PATH = path.join(process.cwd(), "config.json");
 const DATA_DIR = path.join(process.cwd(), "data");
 const DUMP_PATH = path.join(DATA_DIR, "sentinel-sdk.dump.js");
 
@@ -120,39 +119,11 @@ interface ConfigData {
 
 class Config {
   private data: ConfigData = {
-    deviceId: null,
-    cookies: "",
+    deviceId: uuid(),
+    cookies: process.env.CHATGPT_COOKIES ?? "",
     conversationId: null,
     parentMessageId: null,
   };
-
-  constructor(private readonly filePath: string = CONFIG_PATH) {
-    this.load();
-  }
-
-  private load(): void {
-    if (fs.existsSync(this.filePath)) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as Partial<ConfigData>;
-        this.data.deviceId = raw.deviceId || null;
-        this.data.cookies = raw.cookies || "";
-        this.data.conversationId = raw.conversationId || null;
-        this.data.parentMessageId = raw.parentMessageId || null;
-      } catch {
-      }
-    }
-    if (!this.data.deviceId) {
-      this.data.deviceId = uuid();
-      this.save();
-    }
-  }
-
-  private save(): void {
-    try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
-    } catch {
-    }
-  }
 
   get deviceId(): string {
     return this.data.deviceId ?? "";
@@ -164,7 +135,6 @@ class Config {
 
   set cookies(v: string) {
     this.data.cookies = v;
-    this.save();
   }
 
   get conversationId(): string | null {
@@ -173,7 +143,6 @@ class Config {
 
   set conversationId(v: string | null) {
     this.data.conversationId = v;
-    this.save();
   }
 
   get parentMessageId(): string | null {
@@ -182,13 +151,11 @@ class Config {
 
   set parentMessageId(v: string | null) {
     this.data.parentMessageId = v;
-    this.save();
   }
 
   clearConversation(): void {
     this.data.conversationId = null;
     this.data.parentMessageId = null;
-    this.save();
   }
 }
 

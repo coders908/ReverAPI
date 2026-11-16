@@ -48,7 +48,7 @@ Common contract in `providers/types.ts` — a provider only has to emit `pending
 3. While it runs, the downloaded sources are dumped to `data/sentinel-sdk.dump.js`; the file is deleted as soon as the proof is minted, so it never outlives a request.
 4. Mints a proof-of-work token locally, exchanges it with `/sentinel/req`, and builds the `openai-sentinel-*` headers.
 5. Streams `/backend-anon/f/conversation` as SSE, parses `event:` / `data:` frames and emits text deltas.
-6. Persists `deviceId`, cookies and the conversation ids in `config.json`.
+6. Keeps `deviceId`, cookies and the conversation ids in memory only — nothing is written to disk, so each run starts a fresh session.
 
 ## Commands
 
@@ -71,9 +71,9 @@ Plain text is sent to the active model.
 | --- | --- |
 | `GEMINI_BL` | gemini web-server build id (bump it if Google rotates the build) |
 | `REVER_SYSTEM_PROMPT` | default system prompt for gemini |
-| `config.json` | gpt device id, optional cookies, conversation ids |
+| `CHATGPT_COOKIES` | optional raw cookie header for an authenticated gpt session |
 
-`config.json` is created automatically on first use and is git-ignored. To use an authenticated ChatGPT account, set `cookies` to a raw cookie header (e.g. `__Secure-next-auth.session-token=…`); without it the anonymous endpoint is used.
+The gpt device id and conversation ids are generated per run and kept in memory only — no config file is created. To use an authenticated ChatGPT account, set `CHATGPT_COOKIES` (e.g. `__Secure-next-auth.session-token=…`); without it the anonymous endpoint is used.
 
 ## Layout
 
