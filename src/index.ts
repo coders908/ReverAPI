@@ -99,25 +99,177 @@ const ART_RAW = `
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⠿⠭⠯⠭⠽⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 `.split("\n");
 
-const isBlankRow = (line: string) => [...line].every((ch) => ch === "⠀" || ch === " ");
+/** Braille blank and space behave as transparent pixels in the drawing. */
+const isBlankChar = (ch: string) => ch === "⠀" || ch === " ";
+
+const isBlankRow = (line: string) => [...line].every(isBlankChar);
+
+/** Drops the empty padding so the drawing can sit next to other art. */
+function trimArt(rows: string[]): string[] {
+  let firstColumn = Number.POSITIVE_INFINITY;
+  let lastColumn = -1;
+
+  for (const row of rows) {
+    [...row].forEach((char, index) => {
+      if (isBlankChar(char)) return;
+      firstColumn = Math.min(firstColumn, index);
+      lastColumn = Math.max(lastColumn, index);
+    });
+  }
+  if (lastColumn < 0) return rows;
+
+  return rows.map((row) => [...row].slice(firstColumn, lastColumn + 1).join(""));
+}
 
 const ART = (() => {
-  const rows = ART_RAW;
-  const first = rows.findIndex((l) => !isBlankRow(l));
-  const last = rows.length - [...rows].reverse().findIndex((l) => !isBlankRow(l));
-  return rows.slice(first, last);
+  const first = ART_RAW.findIndex((line) => !isBlankRow(line));
+  const last = ART_RAW.length - [...ART_RAW].reverse().findIndex((line) => !isBlankRow(line));
+  return trimArt(ART_RAW.slice(first, last));
 })();
+
+
+/** Block letters for the wordmark: every glyph is five columns wide. */
+const BLOCK_GLYPHS: Record<string, string[]> = {
+  R: ["████ ", "█   █", "████ ", "█  █ ", "█   █"],
+  E: ["█████", "█    ", "████ ", "█    ", "█████"],
+  V: ["█   █", "█   █", "█   █", " █ █ ", "  █  "],
+  A: [" ███ ", "█   █", "█████", "█   █", "█   █"],
+  P: ["████ ", "█   █", "████ ", "█    ", "█    "],
+  I: ["█████", "  █  ", "  █  ", "  █  ", "█████"],
+};
+
+const BLOCK_ROWS = 5;
+
+/** `REVERAPI` drawn large, one row per visual line. */
+function buildWordmark(word: string): string[] {
+  const rows: string[] = [];
+  for (let row = 0; row < BLOCK_ROWS; row += 1) {
+    rows.push([...word].map((letter) => BLOCK_GLYPHS[letter]?.[row] ?? "     ").join(" "));
+  }
+  return rows;
+}
+
+const WORDMARK = buildWordmark("REVERAPI");
 
 const W = 74;
 const PAD = 2;
 
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+/** Length as the terminal sees it: colouring codes take no room. */
+const visibleLength = (text: string): number => [...text.replace(ANSI, "")].length;
+
 function center(text: string, width = W): string {
-  const len = [...text].length;
-  const left = Math.max(PAD, Math.floor((width - len) / 2));
+  const left = Math.max(PAD, Math.floor((width - visibleLength(text)) / 2));
   return " ".repeat(left) + text;
 }
 
 const rule = (width = W, t0 = 0, t1 = 1) => gradient("─".repeat(width), t0, t1);
+
+
+const HERO_GAP = 4;
+
+interface Hero {
+  /** plain text rows, all the same width */
+  rows: string[];
+  width: number;
+  /** what the rest of the header should match in width */
+  headerWidth: number;
+}
+
+const padRow = (row: string, width: number): string => {
+  const missing = width - [...row].length;
+  return missing > 0 ? row + " ".repeat(missing) : row;
+};
+
+/**
+ * Terminal width, falling back to `COLUMNS` when stdout is not a TTY (pipes,
+ * CI logs), so the lockup keeps its side-by-side form there too.
+ */
+function terminalColumns(): number {
+  return process.stdout.columns ?? Number(process.env.COLUMNS) ?? 0;
+}
+
+/**
+ * Lays the mark and the wordmark out as one lockup. A wide terminal gets them
+ * side by side; a narrow one folds the same order into a stack.
+ */
+function composeHero(): Hero {
+  const artWidth = Math.max(...ART.map((row) => [...row].length));
+  const wordWidth = Math.max(...WORDMARK.map((row) => [...row].length));
+  const lockupWidth = artWidth + HERO_GAP + wordWidth;
+  const columns = terminalColumns();
+
+  if (columns >= lockupWidth + PAD * 2) {
+    const nameOffset = Math.floor((ART.length - WORDMARK.length) / 2);
+    const rows = ART.map((artRow, index) => {
+      const wordRow = WORDMARK[index - nameOffset];
+      const name = wordRow ? padRow(wordRow, wordWidth) : " ".repeat(wordWidth);
+      return `${artRow}${" ".repeat(HERO_GAP)}${name}`;
+    });
+    return { rows, width: lockupWidth, headerWidth: Math.max(W, lockupWidth) };
+  }
+
+  const width = Math.max(artWidth, wordWidth);
+  const rows = [
+    ...ART.map((row) => padRow(row, width)),
+    "",
+    ...WORDMARK.map((row) => padRow(row, wordWidth)),
+  ];
+  return { rows, width, headerWidth: W };
+}
+
+interface PaintedCell {
+  char: string;
+  /** colour for this cell, empty when the cell stays unpainted */
+  color: string;
+}
+
+/** Colours the lockup once, so the reveal never shifts the gradient. */
+function paintHero(rows: string[]): PaintedCell[][] {
+  const last = Math.max(1, rows.length - 1);
+  return rows.map((row, index) => {
+    const tint = rgbFg(sample(index / last));
+    return [...row].map((char) => ({ char, color: char === " " ? "" : tint }));
+  });
+}
+
+/** Renders one row up to `limit` visible columns, switching colour only when it changes. */
+function renderLine(line: PaintedCell[], limit: number): string {
+  let text = "";
+  let active = "";
+  const stop = Math.min(limit, line.length);
+
+  for (let index = 0; index < stop; index += 1) {
+    const cell = line[index];
+    if (cell.color !== active) {
+      text += cell.color || RESET;
+      active = cell.color;
+    }
+    text += cell.char;
+  }
+  return active ? text + RESET : text;
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const HERO_FRAMES = 24;
+const HERO_FRAME_MS = 22;
+
+/** Reveals the lockup left to right and leaves the cursor under it. */
+async function animateHero(rows: PaintedCell[][]): Promise<void> {
+  const width = Math.max(...rows.map((line) => line.length));
+
+  for (let frame = 1; frame <= HERO_FRAMES; frame += 1) {
+    const limit = Math.ceil((width * frame) / HERO_FRAMES);
+    if (frame > 1) raw(`\x1b[${rows.length}F`);
+    for (const line of rows) {
+      raw(`${renderLine(line, limit)}\x1b[K\n`);
+    }
+    if (frame < HERO_FRAMES) await sleep(HERO_FRAME_MS);
+  }
+}
 
 
 const out = console.log.bind(console);
@@ -174,41 +326,46 @@ function wrap(text: string, width: number): string[] {
 }
 
 
-function banner(active: ChatProvider, entry: ModelEntry): void {
+/**
+ * Draws the console header. The mark and the wordmark are painted once and
+ * then revealed left to right, so the animation never recolours the art.
+ */
+async function banner(active: ChatProvider, entry: ModelEntry): Promise<void> {
   console.clear();
-  out("");
-  // `gradient` ends with a reset, so bold has to be restored between the words.
-  out(
-    center(
-      `${BOLD}${gradient("R E V E R", 0, 0.45)}${BOLD}${gradient(" A P I", 0.5, 1)}`,
-    ),
-  );
-  out("");
 
-  ART.forEach((line, i) => {
-    const t = i / Math.max(1, ART.length - 1);
-    out(center(rgbFg(sample(t)) + line + RESET));
-  });
+  const hero = composeHero();
+  const painted = paintHero(hero.rows);
+  // Every text row below the mark is centred on the same width, so the header
+  // reads as one block instead of several differently sized pieces.
+  const heroRuleWidth = hero.headerWidth;
 
   out("");
-  out(center(rule()));
+  raw(`${C.faint}${"\x1b[?25l"}`); // hide the cursor while the art builds up
+  await animateHero(painted);
+  raw(`\x1b[?25h${RESET}`);
+
+  out("");
+  out(center(rule(heroRuleWidth), heroRuleWidth));
   const proxyMode = proxyLabel();
   out(
     center(
       `${C.faint}model${RESET} ${C.text}${entry.label}${RESET} ${C.faint}│${RESET} ${C.faint}provider${RESET} ${C.text}${entry.provider}${RESET} ${C.faint}│${RESET} ${C.faint}transport${RESET} ${C.text}https${RESET} ${C.faint}│${RESET} ${C.faint}proxy${RESET} ${C.text}${proxyMode}${RESET}`,
+      heroRuleWidth,
     ),
   );
-  out(center(rule(74, 1, 0.4)));
+  out(center(rule(heroRuleWidth, 1, 0.4), heroRuleWidth));
   out("");
   out(
     center(
       `${C.faint}type${RESET} ${C.cyan}${UNDERLINE}/help${RESET}${C.faint} for commands${RESET} ${C.faint}·${RESET} ${C.faint}${UNDERLINE}/model${RESET}${C.faint} to switch${RESET} ${C.faint}·${RESET} ${C.faint}${ITALIC}plain text is a prompt${RESET}`,
+      heroRuleWidth,
     ),
   );
   out("");
   out(
     center(
       `${C.faint}github.com/coders908${RESET} ${C.faint}·${RESET} ${C.violet}@Neriya${RESET}`,
+      heroRuleWidth,
     ),
   );
   out("");
@@ -503,15 +660,25 @@ function showInfo(active: ChatProvider): void {
 let entry: ModelEntry = entryFor(DEFAULT_MODEL) ?? MODELS[0];
 let active: ChatProvider = providerFor(entry);
 
-banner(active, entry);
-
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
 const promptFor = (e: ModelEntry) =>
   `${gradient("▎", 0.2, 0.6)} ${C.red}${BOLD}rever${RESET} ${C.faint}·${RESET} ${C.violet}${e.short}${RESET} ${C.faint}▸${RESET} `;
 
 rl.setPrompt(promptFor(entry));
-rl.prompt();
+
+/** The header animates first; the prompt only appears once it has settled. */
+async function startSession(): Promise<void> {
+  await banner(active, entry);
+  // stdin can end mid-animation (piped input, `echo ... | npm run dev`).
+  if (closing) {
+    finishSession();
+    return;
+  }
+  rl.prompt();
+}
+
+void startSession();
 
 let busy = false;
 let closing = false;
@@ -562,7 +729,7 @@ async function handle(input: string): Promise<void> {
       entry = target;
       active = providerFor(target);
       rl.setPrompt(promptFor(entry));
-      banner(active, entry);
+      await banner(active, entry);
       rl.prompt();
       busy = false;
       return;
@@ -594,7 +761,7 @@ async function handle(input: string): Promise<void> {
       showInfo(active);
       break;
     case "/clear":
-      banner(active, entry);
+      await banner(active, entry);
       break;
     case "/exit":
     case "/quit":
