@@ -177,10 +177,10 @@ function wrap(text: string, width: number): string[] {
 function banner(active: ChatProvider, entry: ModelEntry): void {
   console.clear();
   out("");
-  out(center(gradient("R E V E R", 0, 0.5)));
+  // `gradient` ends with a reset, so bold has to be restored between the words.
   out(
     center(
-      `${C.mute}multi-model console${RESET} ${C.faint}·${RESET} ${C.mute}cookie-free${RESET} ${C.faint}·${RESET} ${C.violet}${entry.label}${RESET}`,
+      `${BOLD}${gradient("R E V E R", 0, 0.45)}${BOLD}${gradient(" A P I", 0.5, 1)}`,
     ),
   );
   out("");
@@ -203,6 +203,12 @@ function banner(active: ChatProvider, entry: ModelEntry): void {
   out(
     center(
       `${C.faint}type${RESET} ${C.cyan}${UNDERLINE}/help${RESET}${C.faint} for commands${RESET} ${C.faint}·${RESET} ${C.faint}${UNDERLINE}/model${RESET}${C.faint} to switch${RESET} ${C.faint}·${RESET} ${C.faint}${ITALIC}plain text is a prompt${RESET}`,
+    ),
+  );
+  out("");
+  out(
+    center(
+      `${C.faint}github.com/coders908${RESET} ${C.faint}·${RESET} ${C.violet}@Neriya${RESET}`,
     ),
   );
   out("");
