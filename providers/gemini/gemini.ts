@@ -86,6 +86,177 @@ const unescapeJsonString = (fragment: string): string | null => {
   }
 };
 
+const LEAKY_URL_HOSTS = [
+  "googleusercontent.com",
+  "gemini.google.com",
+  "vertexaisearch.cloud.google.com",
+];
+
+const URL_SCHEME = /https?:\/\//i;
+const URL_TERMINATOR = /[\s<>"'`)\]]/;
+
+const escapeForRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function isLeakyHost(host: string): boolean {
+  const lowercased = host.toLowerCase();
+  return LEAKY_URL_HOSTS.some(
+    (leakyHost) => lowercased === leakyHost || lowercased.endsWith(`.${leakyHost}`),
+  );
+}
+
+const LEAKY_URL = new RegExp(
+  `${URL_SCHEME.source}(?:[^\\s/()\\[\\]<>"'\`]*\\.)?(?:${LEAKY_URL_HOSTS.map(escapeForRegExp).join(
+    "|",
+  )})(?:[^\\s<>"'\`)\\]])*`,
+  "gi",
+);
+
+const LINK_OPENER_TAIL = /\[[^[\]\n]{0,40}\]\($/;
+
+const LINK_OPENER_MAYBE_TAIL = /\[[^[\]\n]{0,40}\]?\(?$/;
+
+const EMPTY_MARKDOWN_LINK = /\[[^[\]\n]{0,40}\]\(\s*\)/g;
+
+export function stripLeakyUrls(text: string): string {
+  if (!text) return text;
+
+  return text
+    .replace(LEAKY_URL, "")
+    .replace(EMPTY_MARKDOWN_LINK, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+function partialSchemeLength(text: string): number {
+  const longestProbe = Math.min(text.length, "https://".length - 1);
+
+  for (let length = longestProbe; length > 0; length -= 1) {
+    const tail = text.slice(text.length - length).toLowerCase();
+    if ("https://".startsWith(tail) || "http://".startsWith(tail)) return length;
+  }
+  return 0;
+}
+
+function splitUnsafeTail(text: string): { kept: string; held: string } {
+  const afterScheme = text.slice(0, text.length - partialSchemeLength(text));
+  const opener = LINK_OPENER_MAYBE_TAIL.exec(afterScheme);
+  const cut = opener ? opener.index : afterScheme.length;
+
+  return { kept: text.slice(0, cut), held: text.slice(cut) };
+}
+
+function splitSafeText(buffer: string): {
+  ready: string;
+  pending: string;
+  dropped: boolean;
+} {
+  let ready = "";
+  let cursor = 0;
+  let dropped = false;
+
+  while (cursor < buffer.length) {
+    const rest = buffer.slice(cursor);
+    const schemeAt = rest.search(URL_SCHEME);
+
+    if (schemeAt === -1) {
+      const { kept, held } = splitUnsafeTail(rest);
+      return { ready: ready + kept, pending: held, dropped };
+    }
+
+    const urlStart = cursor + schemeAt;
+    ready += buffer.slice(cursor, urlStart);
+
+    const fromScheme = buffer.slice(urlStart);
+    const schemeLength = URL_SCHEME.exec(fromScheme)![0].length;
+    const afterScheme = fromScheme.slice(schemeLength);
+    const terminatorAt = afterScheme.search(URL_TERMINATOR);
+
+    if (terminatorAt === -1) {
+      const host = afterScheme.split("/")[0];
+      const hostIsSettled = afterScheme.includes("/") && host.includes(".");
+      if (hostIsSettled && !isLeakyHost(host)) {
+        return { ready: ready + fromScheme, pending: "", dropped };
+      }
+      const { kept, held } = splitUnsafeTail(ready);
+      return { ready: kept, pending: held + fromScheme, dropped };
+    }
+
+    const urlEnd = urlStart + schemeLength + terminatorAt;
+    const url = buffer.slice(urlStart, urlEnd);
+    if (!isLeakyHost(url.slice(schemeLength).split("/")[0])) {
+      ready += url;
+      cursor = urlEnd;
+      continue;
+    }
+
+    ready = ready.replace(LINK_OPENER_TAIL, "");
+    cursor = buffer[urlEnd] === ")" ? urlEnd + 1 : urlEnd;
+    dropped = true;
+    while (buffer[cursor] === " ") cursor += 1;
+  }
+
+  const { kept, held } = splitUnsafeTail(ready);
+  return { ready: kept, pending: held, dropped };
+}
+
+export interface CitationFilter {
+  push(delta: string): string;
+  finish(): string;
+}
+
+export function createCitationFilter(): CitationFilter {
+  let pending = "";
+  let lastChar = "";
+  let needsSpaceCollapse = false;
+
+  const collapseGap = (text: string): string => {
+    if (!needsSpaceCollapse) return text;
+
+    const leadingBlanks = /^[ \t\n]*/.exec(text)![0];
+    if (leadingBlanks.includes("\n")) {
+      needsSpaceCollapse = false;
+      return text;
+    }
+    if (leadingBlanks.length === text.length) return "";
+
+    needsSpaceCollapse = false;
+    if (leadingBlanks.length === 0) return text;
+    const afterSpaces = text.slice(leadingBlanks.length);
+    return (lastChar === " " || lastChar === "" ? "" : " ") + afterSpaces;
+  };
+
+  return {
+    push(delta: string): string {
+      const { ready, pending: rest, dropped } = splitSafeText(pending + delta);
+      pending = rest;
+
+      if (dropped) needsSpaceCollapse = true;
+      const visible = collapseGap(ready);
+      if (visible.length > 0) lastChar = visible[visible.length - 1];
+      return visible;
+    },
+    finish(): string {
+      const remaining = pending;
+      pending = "";
+      if (!remaining) return "";
+
+      const kept = (() => {
+        if (URL_SCHEME.test(remaining)) {
+          const afterOpener = remaining.replace(/^\[[^[\]\n]{0,40}\]\(/, "");
+          const host = afterOpener.replace(URL_SCHEME, "").split("/")[0];
+          return isLeakyHost(host) ? "" : remaining;
+        }
+        return LINK_OPENER_TAIL.test(remaining) ? "" : remaining;
+      })();
+
+      if (kept === "") return "";
+      needsSpaceCollapse = false;
+      return kept;
+    },
+  };
+}
+
 export function parseGeminiChunk(chunkText: string): string | null {
   const primary = [
     ...chunkText.matchAll(/\[\[\\"rc_[^"]+\\",\[\\"([\s\S]*?)\\"\]/g),
@@ -242,6 +413,7 @@ export class GeminiClient {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    const citations = createCitationFilter();
     let raw = "";
     let previous = "";
     let text = "";
@@ -249,6 +421,11 @@ export class GeminiClient {
     let bytes = 0;
     let deltas = 0;
     let firstByteMs = 0;
+
+    const emit = (delta: string) => {
+      text += delta;
+      handlers.onDelta?.(delta);
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -271,9 +448,12 @@ export class GeminiClient {
       if (delta.length === 0) continue;
 
       deltas += 1;
-      text += delta;
-      handlers.onDelta?.(delta);
+      const visible = citations.push(delta);
+      if (visible.length > 0) emit(visible);
     }
+
+    const tail = citations.finish();
+    if (tail.length > 0) emit(tail);
 
     handlers.onEvent?.({
       type: "done",
@@ -283,15 +463,15 @@ export class GeminiClient {
       ms: Date.now() - started,
     });
 
-    if (text.length === 0) {
+    if (text.trim().length === 0) {
       throw new Error("Gemini returned an empty response");
     }
 
     this.history.push({ role: "user", content: message });
-    this.history.push({ role: "assistant", content: text });
+    this.history.push({ role: "assistant", content: stripLeakyUrls(text) });
 
     return {
-      text,
+      text: stripLeakyUrls(text),
       raw,
       id: `chatcmpl-${Date.now()}`,
       chunks,
