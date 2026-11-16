@@ -3,6 +3,14 @@ import path from "node:path";
 import https from "node:https";
 import vm from "node:vm";
 import crypto from "node:crypto";
+import {
+  isRetryableNetworkError,
+  proxiedFetch,
+  proxyAttempts,
+  proxyDetail,
+  proxyUsage,
+  takeProxyAgent,
+} from "../../src/proxy.js";
 import type {
   ChatMessage,
   ChatProvider,
@@ -74,39 +82,67 @@ function httpReq(
   body: string | object | null = null,
   timeoutMs = REQ_TIMEOUT_MS,
 ): Promise<HttpResponse> {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    let bodyBuf: Buffer | null = null;
-    if (body !== null && body !== undefined) {
-      bodyBuf = Buffer.from(
-        typeof body === "string" ? body : JSON.stringify(body),
-        "utf8",
-      );
-      headers = { ...headers, "content-length": String(bodyBuf.length) };
-    }
-
-    const req = https.request(
-      { method, hostname: u.hostname, path: u.pathname + u.search, headers },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () =>
-          resolve({
-            status: res.statusCode ?? 0,
-            headers: res.headers as Record<string, any>,
-            body: Buffer.concat(chunks),
-          }),
-        );
-      },
+  let bodyBuf: Buffer | null = null;
+  if (body !== null && body !== undefined) {
+    bodyBuf = Buffer.from(
+      typeof body === "string" ? body : JSON.stringify(body),
+      "utf8",
     );
+    headers = { ...headers, "content-length": String(bodyBuf.length) };
+  }
 
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }));
+  const attemptOnce = (): Promise<HttpResponse> =>
+    new Promise((resolve, reject) => {
+      const u = new URL(url);
+      const agent = takeProxyAgent(`${method} ${u.pathname}`);
+
+      const req = https.request(
+        {
+          method,
+          hostname: u.hostname,
+          path: u.pathname + u.search,
+          headers,
+          ...(agent ? { agent } : {}),
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers as Record<string, any>,
+              body: Buffer.concat(chunks),
+            }),
+          );
+          res.on("error", reject);
+        },
+      );
+
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }));
+      });
+      req.on("error", reject);
+      if (bodyBuf) req.write(bodyBuf);
+      req.end();
     });
-    req.on("error", reject);
-    if (bodyBuf) req.write(bodyBuf);
-    req.end();
-  });
+
+  return withProxyRetry(attemptOnce);
+}
+
+async function withProxyRetry<T>(attemptOnce: () => Promise<T>): Promise<T> {
+  const attempts = proxyAttempts();
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await attemptOnce();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts - 1 || !isRetryableNetworkError(error)) break;
+    }
+  }
+
+  throw lastError;
 }
 
 
@@ -892,7 +928,7 @@ function makeShim(opts: {
     ArrayBuffer,
     DataView,
 
-    fetch: (...a: any[]) => fetch(...(a as [any])),
+    fetch: (input: any, init?: any) => proxiedFetch(input, init),
     AbortController,
     AbortSignal,
 
@@ -1225,15 +1261,23 @@ class ChatGPT {
   ): Promise<ChatResponse> {
     if (!options.skipRefresh) await this.refreshTokens();
 
-    try {
-      return await this.chatOnce(prompt, handlers);
-    } catch (e: any) {
-      if (/HTTP 403/.test(String(e?.message))) {
-        await this.refreshTokens();
+    const attempts = Math.max(proxyAttempts(), 2);
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
         return await this.chatOnce(prompt, handlers);
+      } catch (e: any) {
+        lastError = e;
+        if (/HTTP 403/.test(String(e?.message))) {
+          await this.refreshTokens();
+          continue;
+        }
+        if (attempt === attempts - 1 || !isRetryableNetworkError(e)) break;
       }
-      throw e;
     }
+
+    throw lastError;
   }
 
   private chatOnce(prompt: string, handlers: ChatHandlers): Promise<ChatResponse> {
@@ -1318,9 +1362,16 @@ class ChatGPT {
       const bodyBuf = Buffer.from(JSON.stringify(body), "utf8");
       headers["content-length"] = String(bodyBuf.length);
       const url = new URL(BASE + "/backend-anon/f/conversation");
+      const proxyAgent = takeProxyAgent("POST /backend-anon/f/conversation");
 
       const req = https.request(
-        { method: "POST", hostname: url.hostname, path: url.pathname, headers },
+        {
+          method: "POST",
+          hostname: url.hostname,
+          path: url.pathname,
+          headers,
+          ...(proxyAgent ? { agent: proxyAgent } : {}),
+        },
         (res) => {
           if (res.statusCode !== 200) {
             let err = "";
@@ -1477,7 +1528,7 @@ class ChatGPT {
 export class GptProvider implements ChatProvider {
   readonly id = "gpt";
   readonly model = "gpt-6";
-  readonly vendor = "openai";
+  readonly provider = "openai";
   readonly supportsSystem = false;
 
   private readonly client: ChatGPT;
@@ -1560,6 +1611,8 @@ export class GptProvider implements ChatProvider {
       ["endpoint", "chatgpt.com · /backend-anon/f/conversation"],
       ["transport", "POST · https · event-stream"],
       ["sentinel", "sdk.js · proof-of-work minted locally"],
+      ["proxy", proxyDetail()],
+      ["routing", proxyUsage()],
       ["model", "gpt-6 (auto-routed)"],
       ["device", this.client.deviceId],
       ["conversation", this.client.conversationId ?? "—"],

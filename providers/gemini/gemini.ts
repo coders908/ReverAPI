@@ -4,6 +4,7 @@ import type {
   ChatResult,
   SendHandlers,
 } from "../types.js";
+import { proxiedFetch, proxyDetail, proxyUsage } from "../../src/proxy.js";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36";
@@ -202,20 +203,24 @@ export class GeminiClient {
       bl: this.bl,
     });
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "User-Agent": USER_AGENT,
-        "X-Same-Domain": "1",
-        Origin: "https://gemini.google.com",
-        Referer: "https://gemini.google.com/",
-        Accept: "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+    const res = await proxiedFetch(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "User-Agent": USER_AGENT,
+          "X-Same-Domain": "1",
+          Origin: "https://gemini.google.com",
+          Referer: "https://gemini.google.com/",
+          Accept: "*/*",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        body: payload,
+        signal: AbortSignal.timeout(this.timeoutMs),
       },
-      body: payload,
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+      "POST /StreamGenerate",
+    );
 
     handlers.onEvent?.({
       type: "response",
@@ -303,7 +308,7 @@ export function createGeminiClient(options: GeminiClientOptions = {}): GeminiCli
 export class GeminiProvider implements ChatProvider {
   readonly id = "gemini";
   readonly model = "gemini 3.5 flash lite";
-  readonly vendor = "google";
+  readonly provider = "google";
   readonly supportsSystem = true;
 
   private client = new GeminiClient({ system: process.env.REVER_SYSTEM_PROMPT });
@@ -367,6 +372,8 @@ export class GeminiProvider implements ChatProvider {
       ["endpoint", "gemini.google.com · /StreamGenerate"],
       ["build", c.buildId],
       ["transport", "POST · https · cookie-free"],
+      ["proxy", proxyDetail()],
+      ["routing", proxyUsage()],
       ["model", "gemini 3.5 flash lite"],
       ["context", `${c.messages.length} messages`],
     ];

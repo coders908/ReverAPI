@@ -25,7 +25,8 @@ export interface ChatResult {
 export interface ChatProvider {
   readonly id: string;
   readonly model: string;
-  readonly vendor: string;
+  /** display name of the upstream service, e.g. `google` */
+  readonly provider: string;
   readonly supportsSystem: boolean;
   send(text: string, handlers?: SendHandlers): Promise<ChatResult>;
   reset(): void;

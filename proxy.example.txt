@@ -1,0 +1,6 @@
+# One proxy per line. Credentials are optional; the scheme defaults to http.
+# Every request rotates to the next entry, so a dead proxy is skipped.
+#
+# host:port
+# user:pass@host:port
+# http://user:pass@host:port

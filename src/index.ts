@@ -1,6 +1,12 @@
 import readline from "node:readline";
 import type { ChatProvider, ChatEvent } from "../providers/types.js";
 import { DEFAULT_MODEL, MODELS, type ModelEntry } from "./models.js";
+import {
+  describeError,
+  proxyLabel,
+  setProxyReporter,
+  type ProxyUsage,
+} from "./proxy.js";
 
 
 const RESET = "\x1b[0m";
@@ -186,9 +192,10 @@ function banner(active: ChatProvider, entry: ModelEntry): void {
 
   out("");
   out(center(rule()));
+  const proxyMode = proxyLabel();
   out(
     center(
-      `${C.faint}model${RESET} ${C.text}${entry.label}${RESET} ${C.faint}│${RESET} ${C.faint}vendor${RESET} ${C.text}${entry.vendor}${RESET} ${C.faint}│${RESET} ${C.faint}transport${RESET} ${C.text}https${RESET} ${C.faint}│${RESET} ${C.faint}auth${RESET} ${C.text}none${RESET}`,
+      `${C.faint}model${RESET} ${C.text}${entry.label}${RESET} ${C.faint}│${RESET} ${C.faint}provider${RESET} ${C.text}${entry.provider}${RESET} ${C.faint}│${RESET} ${C.faint}transport${RESET} ${C.text}https${RESET} ${C.faint}│${RESET} ${C.faint}proxy${RESET} ${C.text}${proxyMode}${RESET}`,
     ),
   );
   out(center(rule(74, 1, 0.4)));
@@ -294,6 +301,8 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
   const state = {
     answer: null as Answer | null,
     live: null as { stop: () => void } | null,
+    liveStep: null as { label: string; detail: string } | null,
+    pendingProxyLines: [] as string[],
     firstByte: 0,
     done: null as Extract<ChatEvent, { type: "done" }> | null,
   };
@@ -302,6 +311,32 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
     state.live?.stop();
     state.live = null;
   };
+
+  const flushProxyLines = () => {
+    if (state.pendingProxyLines.length === 0) return;
+    for (const line of state.pendingProxyLines) {
+      step("proxy", line, C.violet);
+    }
+    state.pendingProxyLines.length = 0;
+  };
+
+  const beginLive = (label: string, detail: string) => {
+    state.liveStep = { label, detail };
+    state.live = live(label, detail);
+  };
+
+  setProxyReporter((usage: ProxyUsage) => {
+    const line = `${usage.exit}  ${C.faint}·${RESET} ${C.text}${usage.request}`;
+    if (state.answer) {
+      state.pendingProxyLines.push(line);
+      return;
+    }
+    stopLive();
+    step("proxy", line, C.violet);
+    if (state.liveStep) {
+      state.live = live(state.liveStep.label, state.liveStep.detail);
+    }
+  });
 
   const colorFor = (label: string) =>
     label === "response"
@@ -315,6 +350,7 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
       onDelta: (delta) => {
         if (!state.answer) {
           stopLive();
+          flushProxyLines();
           state.answer = new Answer();
           state.answer.start();
         }
@@ -325,10 +361,11 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
         switch (event.type) {
           case "pending":
             stopLive();
-            state.live = live(event.label, event.detail);
+            beginLive(event.label, event.detail);
             break;
           case "stage":
             stopLive();
+            state.liveStep = null;
             step(event.label, event.detail, colorFor(event.label));
             break;
           case "first-byte":
@@ -342,6 +379,7 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
     });
 
     stopLive();
+    state.liveStep = null;
 
     if (!state.answer) {
       state.answer = new Answer();
@@ -349,6 +387,7 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
       state.answer.push(res.text);
     }
     state.answer.finish();
+    flushProxyLines();
 
     const total = state.done?.ms ?? Date.now() - started;
     const parts = [
@@ -364,15 +403,22 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
     out("");
   } catch (err) {
     stopLive();
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeError(err);
 
     if (state.answer) {
       state.answer.abort(msg);
+      flushProxyLines();
     } else if (/fetch failed|TimeoutError|ECONNRESET|ETIMEDOUT|aborted/i.test(msg)) {
-      errorBox(`Could not reach ${active.vendor} — ${msg}\nCheck the network, then retry.`);
+      flushProxyLines();
+      errorBox(
+        `Could not reach ${active.provider} — ${msg}\nProxy mode: ${proxyLabel()} · check the network or proxy.txt, then retry.`,
+      );
     } else {
+      flushProxyLines();
       errorBox(msg);
     }
+  } finally {
+    setProxyReporter(null);
   }
 }
 
@@ -383,7 +429,7 @@ function showHelp(): void {
     ["/new", "drop the conversation context"],
     ["/history", "print the current conversation"],
     ["/system <text>", "set a system prompt (gemini only)"],
-    ["/info", "endpoint, transport and context size"],
+    ["/info", "endpoint, transport, proxy routing"],
     ["/clear", "redraw the console"],
     ["/exit", "close the session"],
   ];
@@ -409,7 +455,7 @@ function showModels(entry: ModelEntry): void {
     const name = isActive ? `${C.text}${BOLD}${m.label}${RESET}` : `${C.mute}${m.label}${RESET}`;
     const tag = isActive ? `${C.green}active${RESET}` : `${C.faint}idle${RESET}`;
     out(
-      `  ${mark} ${C.faint}${String(i + 1).padEnd(2)}${RESET} ${name.padEnd(Math.max(2, 30 - m.label.length))} ${C.faint}${m.vendor.padEnd(8)}${RESET} ${tag}`,
+      `  ${mark} ${C.faint}${String(i + 1).padEnd(2)}${RESET} ${name.padEnd(Math.max(2, 30 - m.label.length))} ${C.faint}${m.provider.padEnd(8)}${RESET} ${tag}`,
     );
   });
   out(`  ${rule(52, 0.15, 0.5)}`);

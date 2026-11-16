@@ -72,14 +72,31 @@ Plain text is sent to the active model.
 | `GEMINI_BL` | gemini web-server build id (bump it if Google rotates the build) |
 | `REVER_SYSTEM_PROMPT` | default system prompt for gemini |
 | `CHATGPT_COOKIES` | optional raw cookie header for an authenticated gpt session |
+| `proxy.txt` | proxy list, one per line (`host:port`, `user:pass@host:port`, `http://…`) |
 
 The gpt device id and conversation ids are generated per run and kept in memory only — no config file is created. To use an authenticated ChatGPT account, set `CHATGPT_COOKIES` (e.g. `__Secure-next-auth.session-token=…`); without it the anonymous endpoint is used.
+
+## Proxies
+
+`npm run dev` routes **every** outbound request — sentinel downloads, `/sentinel/req`, the chat stream and the gemini call — through the proxies listed in `proxy.txt`. Entries rotate round-robin, and a request that dies on a connection error is retried on the next proxy.
+
+```
+user:pass@1.2.3.4:3129
+user:pass@5.6.7.8:3129
+```
+
+See `proxy.example.txt` for the accepted formats. Notes:
+- `proxy.txt` is git-ignored, so credentials never land in the repo.
+- Without the file (or when it holds no valid lines) the client falls back to a direct connection.
+- `REVER_PROXY=1` forces proxying outside `npm run dev`, `REVER_PROXY=0` disables it, and `REVER_PROXY_FILE` points at a list elsewhere.
+- `/info` shows the active proxy mode.
 
 ## Layout
 
 ```
 src/index.ts                terminal UI: banner, prompt, live pipeline renderer
 src/models.ts               model registry and provider factories
+src/proxy.ts                proxy.txt loader, rotation and retry helpers
 providers/types.ts          shared provider contract
 providers/gemini/gemini.ts  gemini web endpoint
 providers/gpt/gpt.ts        chatgpt sentinel pipeline

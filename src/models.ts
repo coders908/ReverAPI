@@ -6,7 +6,7 @@ export interface ModelEntry {
   id: string;
   short: string;
   label: string;
-  vendor: string;
+  provider: string;
   create: () => ChatProvider;
 }
 
@@ -15,14 +15,14 @@ export const MODELS: ModelEntry[] = [
     id: "gemini",
     short: "gemini 3.5",
     label: "gemini 3.5 flash lite",
-    vendor: "google",
+    provider: "google",
     create: () => new GeminiProvider(),
   },
   {
     id: "gpt",
     short: "gpt-6",
     label: "gpt-6",
-    vendor: "openai",
+    provider: "openai",
     create: () => new GptProvider(),
   },
 ];
