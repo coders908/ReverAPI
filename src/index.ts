@@ -2,7 +2,6 @@ import readline from "node:readline";
 import type { ChatProvider, ChatEvent } from "../providers/types.js";
 import { DEFAULT_MODEL, MODELS, type ModelEntry } from "./models.js";
 
-/* ─────────────────────────── palette ─────────────────────────── */
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -64,7 +63,6 @@ function gradient(text: string, t0 = 0, t1 = 1): string {
   return out + RESET;
 }
 
-/* ─────────────────────────── artwork ─────────────────────────── */
 
 const ART_RAW = `
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
@@ -115,7 +113,6 @@ function center(text: string, width = W): string {
 
 const rule = (width = W, t0 = 0, t1 = 1) => gradient("─".repeat(width), t0, t1);
 
-/* ─────────────────────────── output ─────────────────────────── */
 
 const out = console.log.bind(console);
 const raw = (s: string) => process.stdout.write(s);
@@ -125,12 +122,10 @@ const fmtBytes = (n: number): string =>
 
 const fmtSec = (ms: number): string => `${(ms / 1000).toFixed(2)}s`;
 
-/** one finished stage of the request pipeline */
 function step(label: string, detail: string, color: string = C.cyan): void {
   out(`  ${color}●${RESET} ${C.mute}${label.padEnd(9)}${RESET} ${C.text}${detail}${RESET}`);
 }
 
-/** single line that updates in place while a stage is in flight */
 function live(label: string, detail: string): { stop: () => void } {
   const started = Date.now();
   const draw = () =>
@@ -172,7 +167,6 @@ function wrap(text: string, width: number): string[] {
   return lines;
 }
 
-/* ─────────────────────────── chrome ─────────────────────────── */
 
 function banner(active: ChatProvider, entry: ModelEntry): void {
   console.clear();
@@ -215,7 +209,6 @@ function printUser(text: string): void {
   }
 }
 
-/** renders the answer live as it arrives */
 class Answer {
   private readonly bodyW = W - 8;
   private col = 0;
@@ -273,7 +266,6 @@ function errorBox(message: string): void {
   out("");
 }
 
-/* ─────────────────────────── model registry ─────────────────────────── */
 
 const instances = new Map<string, ChatProvider>();
 
@@ -294,7 +286,6 @@ function isModelEvent(value: unknown): value is ChatEvent {
   return typeof value === "object" && value !== null && "type" in value;
 }
 
-/* ─────────────────────────── ask ─────────────────────────── */
 
 async function ask(active: ChatProvider, text: string): Promise<void> {
   printUser(text);
@@ -385,7 +376,6 @@ async function ask(active: ChatProvider, text: string): Promise<void> {
   }
 }
 
-/* ─────────────────────────── commands ─────────────────────────── */
 
 function showHelp(): void {
   const rows: Array<[string, string]> = [
@@ -457,7 +447,6 @@ function showInfo(active: ChatProvider): void {
   out("");
 }
 
-/* ─────────────────────────── session ─────────────────────────── */
 
 let entry: ModelEntry = entryFor(DEFAULT_MODEL) ?? MODELS[0];
 let active: ChatProvider = providerFor(entry);

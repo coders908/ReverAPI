@@ -8,7 +8,6 @@ import type {
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36";
 
-/** web-server build id — override with GEMINI_BL when Google rotates it */
 const DEFAULT_BL = "boq_assistant-bard-web-server_20260821.03_p0";
 
 const ENDPOINT =
@@ -22,7 +21,6 @@ export interface GeminiResponse {
   bytes: number;
 }
 
-/** real stages of the gemini call, emitted as they happen */
 export type GeminiEvent =
   | { type: "request"; messages: number; promptBytes: number; bl: string }
   | {
@@ -40,7 +38,6 @@ export interface GeminiHandlers {
   onEvent?: (event: GeminiEvent) => void;
 }
 
-/* ─────────────────────────── prompt ─────────────────────────── */
 
 export function buildFullPrompt(messages: ChatMessage[]): string {
   let fullPrompt = "";
@@ -61,9 +58,7 @@ export function buildFullPrompt(messages: ChatMessage[]): string {
   return fullPrompt;
 }
 
-/* ─────────────────────────── parsing ─────────────────────────── */
 
-/** decodes escapes that survived the second json layer (`\\u003d`, `\\n`, …) */
 const decodeEscapes = (value: string): string =>
   value.replace(/\\(u[0-9a-fA-F]{4}|n|t|r|"|\\|\/)/g, (_match, seq: string) => {
     if (seq.startsWith("u")) {
@@ -90,7 +85,6 @@ const unescapeJsonString = (fragment: string): string | null => {
   }
 };
 
-/** pulls the newest assistant text out of the accumulated stream buffer */
 export function parseGeminiChunk(chunkText: string): string | null {
   const primary = [
     ...chunkText.matchAll(/\[\[\\"rc_[^"]+\\",\[\\"([\s\S]*?)\\"\]/g),
@@ -111,7 +105,6 @@ export function parseGeminiChunk(chunkText: string): string | null {
   return parseWrbFr(chunkText);
 }
 
-/** structural fallback for the classic bard ui payload shape */
 function parseWrbFr(chunkText: string): string | null {
   let text: string | null = null;
 
@@ -147,14 +140,10 @@ function parseWrbFr(chunkText: string): string | null {
   return text;
 }
 
-/* ─────────────────────────── client ─────────────────────────── */
 
 export interface GeminiClientOptions {
-  /** system prompt stitched into every request */
   system?: string;
-  /** override the web-server build id */
   bl?: string;
-  /** abort a hanging stream (default 150s) */
   timeoutMs?: number;
 }
 
@@ -186,7 +175,6 @@ export class GeminiClient {
     this.history.length = 0;
   }
 
-  /** sends a message and streams deltas as they arrive from google */
   async sendMessage(message: string, handlers: GeminiHandlers = {}): Promise<GeminiResponse> {
     const started = Date.now();
     const messages: ChatMessage[] = [
@@ -311,9 +299,7 @@ export function createGeminiClient(options: GeminiClientOptions = {}): GeminiCli
   return new GeminiClient(options);
 }
 
-/* ─────────────────────────── provider ─────────────────────────── */
 
-/** gemini web, exposed through the shared provider contract */
 export class GeminiProvider implements ChatProvider {
   readonly id = "gemini";
   readonly model = "gemini 3.5 flash lite";

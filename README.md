@@ -44,10 +44,11 @@ Common contract in `providers/types.ts` — a provider only has to emit `pending
 
 **GPT-6** (`providers/gpt/gpt.ts`)
 1. Downloads the sentinel SDK and executes it inside a `node:vm` context with a browser shim (DOM, canvas, iframe, crypto, storage).
-2. While it runs, the downloaded sources are dumped to `data/sentinel-sdk.dump.js`; the file is deleted as soon as the proof is minted, so it never outlives a request.
-3. Mints a proof-of-work token locally, exchanges it with `/sentinel/req`, and builds the `openai-sentinel-*` headers.
-4. Streams `/backend-anon/f/conversation` as SSE, parses `event:` / `data:` frames and emits text deltas.
-5. Persists `deviceId`, cookies and the conversation ids in `config.json`.
+2. The evaluated SDK is kept in memory, so only the first message of a session downloads it; later messages reuse the same VM context.
+3. While it runs, the downloaded sources are dumped to `data/sentinel-sdk.dump.js`; the file is deleted as soon as the proof is minted, so it never outlives a request.
+4. Mints a proof-of-work token locally, exchanges it with `/sentinel/req`, and builds the `openai-sentinel-*` headers.
+5. Streams `/backend-anon/f/conversation` as SSE, parses `event:` / `data:` frames and emits text deltas.
+6. Persists `deviceId`, cookies and the conversation ids in `config.json`.
 
 ## Commands
 

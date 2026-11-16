@@ -15,18 +15,12 @@ const CONFIG_PATH = path.join(process.cwd(), "config.json");
 const DATA_DIR = path.join(process.cwd(), "data");
 const DUMP_PATH = path.join(DATA_DIR, "sentinel-sdk.dump.js");
 
-/** True only while a sentinel run is in flight; late async appends are dropped. */
 let dumpActive = false;
 
-/**
- * The sentinel dump is only a debugging aid: it lives under data/ and is
- * removed once the proof has been minted, so nothing is left on disk.
- */
 function ensureDataDir(): void {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   } catch {
-    /* silent */
   }
 }
 
@@ -36,7 +30,6 @@ function writeDump(contents: string): void {
   try {
     fs.writeFileSync(DUMP_PATH, contents);
   } catch {
-    /* silent */
   }
 }
 
@@ -46,7 +39,6 @@ function appendDump(contents: string): void {
   try {
     fs.appendFileSync(DUMP_PATH, contents);
   } catch {
-    /* silent */
   }
 }
 
@@ -54,8 +46,10 @@ function discardDump(): void {
   dumpActive = false;
   try {
     fs.rmSync(DUMP_PATH, { force: true });
+    if (fs.readdirSync(DATA_DIR).length === 0) {
+      fs.rmdirSync(DATA_DIR);
+    }
   } catch {
-    /* silent */
   }
 }
 
@@ -116,7 +110,6 @@ function httpReq(
   });
 }
 
-/* ─────────────────────────── config ─────────────────────────── */
 
 interface ConfigData {
   deviceId: string | null;
@@ -146,7 +139,6 @@ class Config {
         this.data.conversationId = raw.conversationId || null;
         this.data.parentMessageId = raw.parentMessageId || null;
       } catch {
-        /* keep defaults */
       }
     }
     if (!this.data.deviceId) {
@@ -159,7 +151,6 @@ class Config {
     try {
       fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
     } catch {
-      /* silent */
     }
   }
 
@@ -201,7 +192,6 @@ class Config {
   }
 }
 
-/* ─────────────────────────── browser shim ─────────────────────────── */
 
 function makeShim(opts: {
   cookieHeader: string;
@@ -244,7 +234,6 @@ function makeShim(opts: {
       try {
         f(evt);
       } catch {
-        /* silent */
       }
     }
   }
@@ -316,7 +305,6 @@ function makeShim(opts: {
           if (typeof f === "function") f.call(this, e);
           else if (f?.handleEvent) f.handleEvent(e);
         } catch {
-          /* silent */
         }
       }
       return !e.defaultPrevented;
@@ -371,7 +359,6 @@ function makeShim(opts: {
             try {
               fn({ type: "load", target: iframe });
             } catch {
-              /* silent */
             }
           }
         });
@@ -653,25 +640,21 @@ function makeShim(opts: {
           try {
             evalScript(code, abs);
           } catch {
-            /* silent */
           }
         }
         el.readyState = "complete";
         try {
           el.onreadystatechange?.(new ShimEvent("readystatechange", { target: el }));
         } catch {
-          /* silent */
         }
         try {
           el.onload?.(new ShimEvent("load", { target: el }));
         } catch {
-          /* silent */
         }
       } catch {
         try {
           el.onerror?.(new ShimErrorEvent("error", { message: "load failed" }));
         } catch {
-          /* silent */
         }
       }
     });
@@ -1045,11 +1028,18 @@ async function doSentinelReq(
   }
 }
 
-/* ─────────────────────────── sentinel ─────────────────────────── */
+
+interface SentinelCache {
+  key: string;
+  ctx: any;
+}
+
+let sharedSentinelCache: SentinelCache | null = null;
 
 class SentinelSolver {
   ctx: any = null;
   private loaded = false;
+  private cacheKey = "";
 
   constructor(private readonly cfg: Config) {}
 
@@ -1059,8 +1049,30 @@ class SentinelSolver {
     return parts.join("; ");
   }
 
-  async load(): Promise<void> {
-    if (this.loaded) return;
+  invalidate(): void {
+    this.loaded = false;
+    this.ctx = null;
+    this.cacheKey = "";
+    sharedSentinelCache = null;
+  }
+
+  get isReady(): boolean {
+    const key = this.cookieHeader();
+    if (this.loaded && this.ctx && this.cacheKey === key) return true;
+    return sharedSentinelCache !== null && sharedSentinelCache.key === key;
+  }
+
+  async load(): Promise<boolean> {
+    const key = this.cookieHeader();
+
+    if (this.loaded && this.ctx && this.cacheKey === key) return false;
+
+    if (sharedSentinelCache && sharedSentinelCache.key === key) {
+      this.ctx = sharedSentinelCache.ctx;
+      this.cacheKey = key;
+      this.loaded = true;
+      return false;
+    }
 
     dumpActive = true;
 
@@ -1084,10 +1096,7 @@ class SentinelSolver {
       15_000,
     );
 
-    if (res.status !== 200) {
-      discardDump();
-      throw new Error(`loader ${res.status}`);
-    }
+    if (res.status !== 200) throw new Error(`loader ${res.status}`);
 
     const loaderSrc = res.body.toString("utf8");
     writeDump(loaderSrc);
@@ -1111,19 +1120,30 @@ class SentinelSolver {
         timeout: 8000,
       });
     } catch (e: any) {
-      discardDump();
       throw new Error(`loader eval: ${e.message}`);
     }
 
+    this.cacheKey = key;
     this.loaded = true;
+    sharedSentinelCache = { key, ctx: this.ctx };
+    return true;
   }
 
   async mintProof(): Promise<{ proof: string; chatReq: string; turnstile: string }> {
-    await this.load();
+    let downloaded = false;
+    try {
+      downloaded = await this.load();
+    } catch (error) {
+      discardDump();
+      throw error;
+    }
 
     try {
       const sdk = this.ctx.SentinelSDK;
-      if (!sdk) throw new Error("sdk unavailable");
+      if (!sdk) {
+        this.invalidate();
+        throw new Error("sdk unavailable");
+      }
 
       const raw = await sdk.token();
 
@@ -1132,7 +1152,6 @@ class SentinelSolver {
         try {
           parsed = JSON.parse(raw);
         } catch {
-          /* silent */
         }
       } else if (raw && typeof raw === "object") {
         parsed = raw;
@@ -1147,14 +1166,15 @@ class SentinelSolver {
 
       if (!proof) throw new Error("no proof token");
       return { proof, chatReq, turnstile };
+    } catch (error) {
+      if (!downloaded) this.invalidate();
+      throw error;
     } finally {
-      // The dump is throwaway debug output: drop it as soon as the proof is minted.
       discardDump();
     }
   }
 }
 
-/* ─────────────────────────── client ─────────────────────────── */
 
 interface ChatHandlers {
   onDelta?: (delta: string) => void;
@@ -1186,7 +1206,6 @@ class ChatGPT {
       try {
         this.activeReq.destroy(new Error("aborted"));
       } catch {
-        /* silent */
       }
       this.activeReq = null;
     }
@@ -1360,7 +1379,6 @@ class ChatGPT {
               try {
                 req.destroy(new Error("stream timeout"));
               } catch {
-                /* silent */
               }
             }
           }, STREAM_TIMEOUT_MS);
@@ -1488,7 +1506,6 @@ class ChatGPT {
   }
 }
 
-/* ─────────────────────────── provider ─────────────────────────── */
 
 export class GptProvider implements ChatProvider {
   readonly id = "gpt";
@@ -1510,11 +1527,17 @@ export class GptProvider implements ChatProvider {
     emit?.({
       type: "pending",
       label: "sentinel",
-      detail: "GET /backend-api/sentinel/sdk.js",
+      detail: this.client.solver.isReady
+        ? "sentinel sdk · cached"
+        : "GET /backend-api/sentinel/sdk.js",
     });
     const loadStart = Date.now();
-    await this.client.solver.load();
-    emit?.({ type: "stage", label: "sdk", detail: `loaded · ${Date.now() - loadStart}ms` });
+    const downloaded = await this.client.solver.load();
+    emit?.({
+      type: "stage",
+      label: "sdk",
+      detail: downloaded ? `loaded · ${Date.now() - loadStart}ms` : "cached in memory",
+    });
 
     emit?.({ type: "pending", label: "proof", detail: "minting sentinel token" });
     const proofStart = Date.now();

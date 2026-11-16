@@ -3,11 +3,8 @@ import { GeminiProvider } from "../providers/gemini/gemini.js";
 import { GptProvider } from "../providers/gpt/gpt.js";
 
 export interface ModelEntry {
-  /** registry id used by /model and the prompt */
   id: string;
-  /** short label for the prompt */
   short: string;
-  /** full display name */
   label: string;
   vendor: string;
   create: () => ChatProvider;
