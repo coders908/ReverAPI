@@ -1,11 +1,10 @@
 {
   "name": "reverapi",
   "version": "1.0.0",
-  "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts"
+    "start": "tsx src/index.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
