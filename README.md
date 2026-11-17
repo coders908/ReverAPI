@@ -78,7 +78,7 @@ npm install
 Start the console:
 
 ```bash
-npm run dev
+npm start
 ```
 
 The header redraws and you land on the prompt:
@@ -105,7 +105,7 @@ active model.
 
 ## Proxies
 
-Proxy routing is on automatically when the app runs through `npm run dev`.
+Proxy routing is on automatically when the app runs through `npm start`.
 Create `proxy.txt` in the project root with one entry per line:
 
 ```text
@@ -124,14 +124,14 @@ Configuration is read from environment variables. Nothing is written to disk.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `REVER_PROXY` | on under `npm run dev` | `1` or `0` to force proxy routing on or off |
+| `REVER_PROXY` | on under `npm start` | `1` or `0` to force proxy routing on or off |
 | `REVER_PROXY_FILE` | `./proxy.txt` | Path to the proxy list |
 | `REVER_SYSTEM_PROMPT` | none | System prompt sent to Gemini on startup |
 
 Example:
 
 ```bash
-REVER_PROXY=0 npm run dev
+REVER_PROXY=0 npm start
 ```
 
 ## Project layout

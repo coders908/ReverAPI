@@ -68,7 +68,8 @@ export function isProxyEnabled(): boolean {
   const flag = (process.env.REVER_PROXY ?? "").toLowerCase();
   if (flag === "0" || flag === "off" || flag === "false") return false;
   if (flag === "1" || flag === "on" || flag === "true") return true;
-  return process.env.npm_lifecycle_event === "dev";
+  const lifecycleEvent = process.env.npm_lifecycle_event ?? "";
+  return lifecycleEvent.length > 0;
 }
 
 function parseProxyLine(rawLine: string): ProxyEndpoint | null {
