@@ -2,5 +2,10 @@ node_modules/
 dist/
 *.log
 .env
+.env.*
 data/
 proxy.txt
+!proxy.example.txt
+.DS_Store
+Thumbs.db
+*.tsbuildinfo
